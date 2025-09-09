@@ -1,0 +1,9 @@
+# This file keeps the data directory in version control
+# Add your Kaggle datasets here:
+# - credit_data.csv
+# - home_credit_default_risk/
+# - german_credit.csv
+# etc.
+
+# Note: Large datasets should not be committed to git.
+# Use .gitignore to exclude them and document download instructions in README.

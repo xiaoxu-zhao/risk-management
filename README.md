@@ -21,7 +21,8 @@ This repository demonstrates core credit risk management capabilities including:
 - **Logistic Regression**: Interpretable baseline models with regularization
 - **Random Forest**: Ensemble method for non-linear relationships
 - **XGBoost/LightGBM**: Gradient boosting for superior predictive performance
-- **Model Calibration**: Probability calibration for accurate risk assessment
+- **Advanced Calibration**: Isotonic regression and beta calibration for accurate risk assessment
+- **Production Scoring Pipeline**: Complete scoring infrastructure with monitoring integration
 
 ### 📈 Risk Metrics & Analytics
 - **Value at Risk (VaR)**: Historical, parametric, and Monte Carlo methods
@@ -29,12 +30,17 @@ This repository demonstrates core credit risk management capabilities including:
 - **Credit Risk Measures**: PD, LGD, EAD calculations and modeling
 - **Regulatory Capital**: Basel III IRB approach implementation
 - **Stress Testing**: Scenario analysis and sensitivity testing
+- **Credit VaR**: Monte Carlo simulation for portfolio credit risk
 
 ### 🔍 Advanced Features
-- **Feature Engineering**: Risk-specific transformations and interaction terms
+- **Enhanced Data Processing**: Outlier detection, normalization, quality assessment
+- **Feature Engineering**: Risk-specific transformations, interaction terms, and behavioral patterns
+- **Model of Credit (MoC)**: Complete PD/LGD/EAD framework with RAROC calculations
+- **Model Monitoring**: Population Stability Index (PSI), KS testing, drift detection
 - **Portfolio Optimization**: Concentration limits and diversification metrics
 - **Model Interpretability**: SHAP values and feature importance analysis
 - **Backtesting Framework**: Walk-forward validation and performance monitoring
+- **Automated Alerts**: Real-time monitoring with configurable thresholds
 
 ## 📁 Project Structure
 
@@ -42,20 +48,26 @@ This repository demonstrates core credit risk management capabilities including:
 risk-management/
 ├── src/                          # Core source code
 │   ├── __init__.py              # Package initialization
-│   ├── data_loader.py           # Dataset loading and preprocessing
-│   ├── feature_engineering.py   # Advanced feature creation
-│   ├── models.py                # ML model implementations
+│   ├── data_loader.py           # Enhanced data loading and preprocessing
+│   ├── feature_engineering.py   # Advanced feature creation and selection
+│   ├── models.py                # ML model implementations with calibration
 │   ├── risk_metrics.py          # Risk calculations and metrics
-│   └── visualization.py         # Plotting and dashboard tools
+│   ├── visualization.py         # Plotting and dashboard tools
+│   ├── moc.py                   # Model of Credit (MoC) framework
+│   └── monitoring.py            # Model monitoring and drift detection
 ├── notebooks/                    # Jupyter analysis notebooks
 │   ├── 01_data_exploration.ipynb
 │   ├── 02_feature_engineering.ipynb
 │   ├── 03_model_development.ipynb
-│   └── 04_risk_analysis.ipynb
+│   ├── 04_risk_analysis.ipynb
+│   ├── 05_moc_implementation.ipynb
+│   └── 06_model_monitoring.ipynb
 ├── tests/                        # Comprehensive test suite
 │   ├── test_data_loader.py
 │   ├── test_models.py
-│   └── test_risk_metrics.py
+│   ├── test_risk_metrics.py
+│   ├── test_moc.py
+│   └── test_monitoring.py
 ├── data/                         # Dataset storage (gitignored)
 ├── docs/                         # Additional documentation
 ├── requirements.txt              # Python dependencies

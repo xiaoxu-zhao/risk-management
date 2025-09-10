@@ -20,7 +20,7 @@ ipywidgets>=8.0.0
 
 # Risk and finance specific
 arch>=5.3.0  # For GARCH models and volatility
-empyrical>=0.5.0  # Risk and performance metrics
+# empyrical>=0.5.0  # Risk and performance metrics - temporarily disabled due to compatibility issues
 
 # Data handling and utilities
 openpyxl>=3.1.0  # Excel files

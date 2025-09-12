@@ -12,6 +12,7 @@ Implementation of various machine learning models for credit risk assessment:
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Any
+from datetime import datetime
 from sklearn.model_selection import (
     train_test_split, cross_val_score, StratifiedKFold, GridSearchCV
 )
@@ -495,6 +496,403 @@ class CreditRiskModels:
         
         return probabilities
         
+    def calibrate_model_advanced(self, model_name: str, X_cal: pd.DataFrame,
+                                y_cal: pd.Series, method: str = 'isotonic',
+                                validation_split: float = 0.3) -> Dict[str, Any]:
+        """
+        Advanced model calibration with comprehensive evaluation.
+        
+        Args:
+            model_name: Name of the model to calibrate
+            X_cal: Calibration features
+            y_cal: Calibration target
+            method: Calibration method ('isotonic', 'sigmoid', 'beta')
+            validation_split: Fraction for validation during calibration
+            
+        Returns:
+            Dictionary with calibration results and metrics
+        """
+        if model_name not in self.models:
+            raise ValueError(f"Model {model_name} not trained")
+        
+        base_model = self.models[model_name]
+        
+        # Split calibration data
+        X_cal_train, X_cal_val, y_cal_train, y_cal_val = train_test_split(
+            X_cal, y_cal, test_size=validation_split, 
+            random_state=self.random_state, stratify=y_cal
+        )
+        
+        # Get uncalibrated predictions
+        uncalibrated_probs = base_model.predict_proba(X_cal_val)[:, 1]
+        
+        calibration_results = {
+            'method': method,
+            'calibration_data_size': len(X_cal_train),
+            'validation_data_size': len(X_cal_val)
+        }
+        
+        if method in ['isotonic', 'sigmoid']:
+            # Use sklearn's CalibratedClassifierCV
+            calibrated_clf = CalibratedClassifierCV(
+                base_model, method=method, cv='prefit'
+            )
+            calibrated_clf.fit(X_cal_train, y_cal_train)
+            calibrated_probs = calibrated_clf.predict_proba(X_cal_val)[:, 1]
+            
+        elif method == 'beta':
+            # Beta calibration (custom implementation)
+            calibrated_clf, calibrated_probs = self._beta_calibration(
+                base_model, X_cal_train, y_cal_train, X_cal_val
+            )
+            
+        else:
+            raise ValueError(f"Unknown calibration method: {method}")
+        
+        # Evaluate calibration quality
+        calibration_metrics = self._evaluate_calibration(
+            y_cal_val, uncalibrated_probs, calibrated_probs
+        )
+        
+        # Store calibrated model
+        calibrated_model_name = f"{model_name}_calibrated_{method}"
+        self.models[calibrated_model_name] = calibrated_clf
+        
+        calibration_results.update(calibration_metrics)
+        calibration_results['calibrated_model_name'] = calibrated_model_name
+        
+        logger.info(f"Advanced calibration completed for {model_name} using {method}. "
+                   f"Brier Score improvement: {calibration_metrics['brier_score_improvement']:.4f}")
+        
+        return calibration_results
+    
+    def _beta_calibration(self, base_model, X_train, y_train, X_val):
+        """
+        Implement beta calibration method.
+        
+        Args:
+            base_model: Base classifier
+            X_train: Training features for calibration
+            y_train: Training targets for calibration
+            X_val: Validation features
+            
+        Returns:
+            Tuple of (calibrated_model, calibrated_probabilities)
+        """
+        # Get uncalibrated probabilities on training set
+        train_probs = base_model.predict_proba(X_train)[:, 1]
+        
+        # Fit beta distribution parameters
+        from scipy.optimize import minimize
+        from scipy.stats import beta
+        
+        def beta_loss(params, probs, labels):
+            a, b = params
+            if a <= 0 or b <= 0:
+                return 1e6  # Large penalty for invalid parameters
+            
+            # Transform probabilities to beta distribution range
+            epsilon = 1e-8
+            probs_clipped = np.clip(probs, epsilon, 1 - epsilon)
+            
+            # Calculate beta probabilities
+            try:
+                beta_probs = beta.cdf(probs_clipped, a, b)
+                beta_probs = np.clip(beta_probs, epsilon, 1 - epsilon)
+                
+                # Negative log-likelihood
+                loss = -np.sum(labels * np.log(beta_probs) + 
+                             (1 - labels) * np.log(1 - beta_probs))
+                return loss
+            except:
+                return 1e6
+        
+        # Initial parameter guess
+        initial_params = [2.0, 2.0]
+        
+        # Optimize beta parameters
+        try:
+            result = minimize(beta_loss, initial_params, 
+                            args=(train_probs, y_train),
+                            method='L-BFGS-B',
+                            bounds=[(0.1, 100), (0.1, 100)])
+            
+            if result.success:
+                a_opt, b_opt = result.x
+            else:
+                # Fallback to method of moments
+                mean_prob = np.mean(train_probs)
+                var_prob = np.var(train_probs)
+                
+                # Method of moments for beta distribution
+                if var_prob > 0 and mean_prob > 0 and mean_prob < 1:
+                    a_opt = mean_prob * ((mean_prob * (1 - mean_prob)) / var_prob - 1)
+                    b_opt = (1 - mean_prob) * ((mean_prob * (1 - mean_prob)) / var_prob - 1)
+                    a_opt = max(0.1, a_opt)
+                    b_opt = max(0.1, b_opt)
+                else:
+                    a_opt, b_opt = 2.0, 2.0  # Default parameters
+        
+        except:
+            a_opt, b_opt = 2.0, 2.0  # Default parameters
+        
+        # Apply beta calibration to validation set
+        val_probs = base_model.predict_proba(X_val)[:, 1]
+        epsilon = 1e-8
+        val_probs_clipped = np.clip(val_probs, epsilon, 1 - epsilon)
+        
+        try:
+            calibrated_probs = beta.cdf(val_probs_clipped, a_opt, b_opt)
+            calibrated_probs = np.clip(calibrated_probs, epsilon, 1 - epsilon)
+        except:
+            # Fallback to simple linear scaling
+            calibrated_probs = val_probs_clipped
+        
+        # Create a simple calibrated model wrapper
+        class BetaCalibratedModel:
+            def __init__(self, base_model, a, b):
+                self.base_model = base_model
+                self.a = a
+                self.b = b
+            
+            def predict_proba(self, X):
+                base_probs = self.base_model.predict_proba(X)
+                calibrated_pos = beta.cdf(np.clip(base_probs[:, 1], 1e-8, 1-1e-8), self.a, self.b)
+                calibrated_neg = 1 - calibrated_pos
+                return np.column_stack([calibrated_neg, calibrated_pos])
+            
+            def predict(self, X):
+                probs = self.predict_proba(X)
+                return (probs[:, 1] >= 0.5).astype(int)
+        
+        calibrated_model = BetaCalibratedModel(base_model, a_opt, b_opt)
+        
+        return calibrated_model, calibrated_probs
+    
+    def _evaluate_calibration(self, y_true, uncalibrated_probs, calibrated_probs):
+        """
+        Evaluate calibration quality using multiple metrics.
+        
+        Args:
+            y_true: True labels
+            uncalibrated_probs: Original probabilities
+            calibrated_probs: Calibrated probabilities
+            
+        Returns:
+            Dictionary with calibration evaluation metrics
+        """
+        # Brier Score
+        uncalibrated_brier = np.mean((uncalibrated_probs - y_true) ** 2)
+        calibrated_brier = np.mean((calibrated_probs - y_true) ** 2)
+        brier_improvement = uncalibrated_brier - calibrated_brier
+        
+        # Expected Calibration Error (ECE)
+        def calculate_ece(y_true, y_prob, n_bins=10):
+            bin_boundaries = np.linspace(0, 1, n_bins + 1)
+            bin_lowers = bin_boundaries[:-1]
+            bin_uppers = bin_boundaries[1:]
+            
+            ece = 0
+            total_samples = len(y_true)
+            
+            for bin_lower, bin_upper in zip(bin_lowers, bin_uppers):
+                in_bin = (y_prob > bin_lower) & (y_prob <= bin_upper)
+                prop_in_bin = in_bin.mean()
+                
+                if prop_in_bin > 0:
+                    accuracy_in_bin = y_true[in_bin].mean()
+                    avg_confidence_in_bin = y_prob[in_bin].mean()
+                    ece += np.abs(avg_confidence_in_bin - accuracy_in_bin) * prop_in_bin
+            
+            return ece
+        
+        uncalibrated_ece = calculate_ece(y_true, uncalibrated_probs)
+        calibrated_ece = calculate_ece(y_true, calibrated_probs)
+        ece_improvement = uncalibrated_ece - calibrated_ece
+        
+        # Reliability (from Brier decomposition)
+        def calculate_reliability(y_true, y_prob, n_bins=10):
+            bin_boundaries = np.linspace(0, 1, n_bins + 1)
+            reliability = 0
+            
+            for i in range(n_bins):
+                bin_lower = bin_boundaries[i]
+                bin_upper = bin_boundaries[i + 1]
+                
+                in_bin = (y_prob > bin_lower) & (y_prob <= bin_upper)
+                
+                if np.sum(in_bin) > 0:
+                    bin_weight = np.sum(in_bin) / len(y_true)
+                    bin_accuracy = np.mean(y_true[in_bin])
+                    bin_confidence = np.mean(y_prob[in_bin])
+                    reliability += bin_weight * (bin_confidence - bin_accuracy) ** 2
+            
+            return reliability
+        
+        uncalibrated_reliability = calculate_reliability(y_true, uncalibrated_probs)
+        calibrated_reliability = calculate_reliability(y_true, calibrated_probs)
+        
+        return {
+            'uncalibrated_brier_score': uncalibrated_brier,
+            'calibrated_brier_score': calibrated_brier,
+            'brier_score_improvement': brier_improvement,
+            'uncalibrated_ece': uncalibrated_ece,
+            'calibrated_ece': calibrated_ece,
+            'ece_improvement': ece_improvement,
+            'uncalibrated_reliability': uncalibrated_reliability,
+            'calibrated_reliability': calibrated_reliability,
+            'reliability_improvement': uncalibrated_reliability - calibrated_reliability
+        }
+    
+    def create_scoring_pipeline(self, model_name: str, 
+                              feature_names: List[str] = None,
+                              scaling_method: str = 'standard') -> Dict[str, Any]:
+        """
+        Create a comprehensive scoring pipeline for production use.
+        
+        Args:
+            model_name: Name of the trained model
+            feature_names: Expected feature names (for validation)
+            scaling_method: Scaling method used during training
+            
+        Returns:
+            Dictionary containing the scoring pipeline components
+        """
+        if model_name not in self.models:
+            raise ValueError(f"Model {model_name} not found")
+        
+        model = self.models[model_name]
+        
+        # Create scoring pipeline
+        pipeline_components = {
+            'model': model,
+            'model_name': model_name,
+            'feature_names': feature_names,
+            'scaling_method': scaling_method,
+            'model_metadata': {
+                'training_date': datetime.now().isoformat(),
+                'model_type': type(model).__name__,
+                'hyperparameters': getattr(model, 'get_params', lambda: {})(),
+            }
+        }
+        
+        # Add feature importance if available
+        if model_name in self.feature_importance:
+            pipeline_components['feature_importance'] = self.feature_importance[model_name]
+        
+        # Add performance metrics if available
+        if model_name in self.model_performance:
+            pipeline_components['model_performance'] = self.model_performance[model_name]
+        
+        # Create scoring function
+        def score_function(X_new: pd.DataFrame, return_probabilities: bool = True) -> Dict[str, Any]:
+            """
+            Score new data using the trained model.
+            
+            Args:
+                X_new: New features to score
+                return_probabilities: Whether to return probabilities or just predictions
+                
+            Returns:
+                Dictionary with scoring results
+            """
+            # Validate features
+            if feature_names is not None:
+                missing_features = set(feature_names) - set(X_new.columns)
+                if missing_features:
+                    raise ValueError(f"Missing features: {missing_features}")
+                
+                # Reorder columns to match training order
+                X_new = X_new[feature_names]
+            
+            # Generate predictions
+            if return_probabilities:
+                try:
+                    probabilities = model.predict_proba(X_new)[:, 1]
+                    predictions = (probabilities >= 0.5).astype(int)
+                except AttributeError:
+                    # Model doesn't support predict_proba
+                    predictions = model.predict(X_new)
+                    probabilities = predictions.astype(float)  # Convert to float
+            else:
+                predictions = model.predict(X_new)
+                probabilities = None
+            
+            # Score statistics
+            scoring_results = {
+                'predictions': predictions,
+                'probabilities': probabilities,
+                'n_scored': len(X_new),
+                'scoring_date': datetime.now().isoformat(),
+                'model_name': model_name
+            }
+            
+            if probabilities is not None:
+                scoring_results.update({
+                    'mean_probability': np.mean(probabilities),
+                    'median_probability': np.median(probabilities),
+                    'std_probability': np.std(probabilities),
+                    'predicted_default_rate': np.mean(predictions)
+                })
+            
+            return scoring_results
+        
+        pipeline_components['score_function'] = score_function
+        
+        logger.info(f"Scoring pipeline created for {model_name}")
+        return pipeline_components
+    
+    def batch_score_with_monitoring(self, model_name: str, X_new: pd.DataFrame,
+                                   reference_scores: np.ndarray = None) -> Dict[str, Any]:
+        """
+        Score new data with built-in monitoring for drift detection.
+        
+        Args:
+            model_name: Name of the model to use
+            X_new: New features to score
+            reference_scores: Reference score distribution for comparison
+            
+        Returns:
+            Dictionary with scoring results and monitoring metrics
+        """
+        if model_name not in self.models:
+            raise ValueError(f"Model {model_name} not found")
+        
+        # Generate scores
+        scoring_pipeline = self.create_scoring_pipeline(model_name)
+        scoring_results = scoring_pipeline['score_function'](X_new)
+        
+        # Add monitoring if reference scores provided
+        if reference_scores is not None:
+            from .monitoring import ModelMonitor
+            
+            monitor = ModelMonitor()
+            current_scores = scoring_results['probabilities']
+            
+            if current_scores is not None:
+                # Calculate PSI
+                psi_results = monitor.calculate_population_stability_index(
+                    reference_scores, current_scores
+                )
+                
+                # Calculate KS statistic
+                ks_results = monitor.calculate_ks_statistic(
+                    reference_scores, current_scores
+                )
+                
+                monitoring_metrics = {
+                    'psi': psi_results['psi'],
+                    'psi_interpretation': psi_results['interpretation'],
+                    'ks_statistic': ks_results['ks_statistic'],
+                    'distribution_shift_detected': (
+                        psi_results['psi'] > 0.25 or ks_results['ks_statistic'] > 0.1
+                    )
+                }
+                
+                scoring_results['monitoring'] = monitoring_metrics
+        
+        return scoring_results
+
     def calibrate_model(self, model_name: str, X_cal: pd.DataFrame, 
                        y_cal: pd.Series, method: str = 'isotonic') -> Any:
         """

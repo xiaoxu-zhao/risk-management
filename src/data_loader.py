@@ -69,6 +69,66 @@ class CreditDataLoader:
         except Exception as e:
             logger.error(f"Error loading Give Me Credit dataset: {e}")
             raise
+
+    def load_lending_club(self, data_dir: Optional[str] = None, drop_cols: Optional[List[str]] = None) -> Dict[str, pd.DataFrame]:
+        """
+        Load Lending Club loan data from Kaggle, searching recursively for 'accepted' and 'rejected' CSV files in all subfolders.
+        Args:
+            data_dir: Root directory to search for CSV files (defaults to self.data_path)
+            drop_cols: Optional list of columns to drop (e.g., IDs, URLs)
+        Returns:
+            Dictionary with keys 'accepted' and 'rejected' containing DataFrames (if found)
+        Example:
+            loader = CreditDataLoader(data_path="C:/Users/xzhaox/.cache/kagglehub/datasets/wordsforthewise/lending-club/versions/3")
+            datasets = loader.load_lending_club()
+            accepted_df = datasets.get('accepted')
+            rejected_df = datasets.get('rejected')
+        """
+        import glob
+        if data_dir is None:
+            data_dir = self.data_path
+        result = {}
+        try:
+            # Search for CSV files recursively in all subfolders
+            csv_files = glob.glob(os.path.join(data_dir, '**', '*.csv'), recursive=True)
+            accepted_file = next((f for f in csv_files if 'accepted' in os.path.basename(f).lower()), None)
+            rejected_file = next((f for f in csv_files if 'rejected' in os.path.basename(f).lower()), None)
+            if accepted_file:
+                df_accepted = pd.read_csv(accepted_file, low_memory=False)
+                if drop_cols:
+                    df_accepted = df_accepted.drop(drop_cols, axis=1, errors='ignore')
+                df_accepted = df_accepted.dropna(axis=1, how='all')
+                target_col = 'loan_status' if 'loan_status' in df_accepted.columns else None
+                features = list(df_accepted.columns)
+                if target_col:
+                    features.remove(target_col)
+                self.metadata['lending_club_accepted'] = {
+                    'target': target_col,
+                    'features': features,
+                    'shape': df_accepted.shape,
+                    'missing_values': df_accepted.isnull().sum().sum()
+                }
+                logger.info(f"Loaded Lending Club accepted dataset: {df_accepted.shape}")
+                result['accepted'] = df_accepted
+            else:
+                logger.warning("No accepted CSV file found in directory or subfolders.")
+            if rejected_file:
+                df_rejected = pd.read_csv(rejected_file, low_memory=False)
+                if drop_cols:
+                    df_rejected = df_rejected.drop(drop_cols, axis=1, errors='ignore')
+                df_rejected = df_rejected.dropna(axis=1, how='all')
+                self.metadata['lending_club_rejected'] = {
+                    'shape': df_rejected.shape,
+                    'missing_values': df_rejected.isnull().sum().sum()
+                }
+                logger.info(f"Loaded Lending Club rejected dataset: {df_rejected.shape}")
+                result['rejected'] = df_rejected
+            else:
+                logger.warning("No rejected CSV file found in directory or subfolders.")
+            return result
+        except Exception as e:
+            logger.error(f"Error loading Lending Club datasets: {e}")
+            raise
             
     def load_home_credit(self, application_path: str, 
                         bureau_path: Optional[str] = None) -> pd.DataFrame:

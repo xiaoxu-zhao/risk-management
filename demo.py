@@ -9,17 +9,22 @@ Perfect for showcasing in interviews or professional presentations.
 Usage:
     python demo.py
 """
+# %% 
+# main script
 
 import sys
 import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import kagglehub
+from kagglehub import KaggleDatasetAdapter
 
 # Add src to path
 sys.path.append('src')
 
 from data_loader import CreditDataLoader
+from lending_club_preprocessing import LendingClubPreprocessor
 from feature_engineering import FeatureEngineer  
 from models import CreditRiskModels
 from risk_metrics import RiskMetrics
@@ -39,30 +44,28 @@ def main():
     print("📊 Step 1: Data Processing & Quality Assessment")
     print("-" * 50)
     
-    loader = CreditDataLoader()
-    
-    # Generate realistic sample data
-    print("Generating sample credit dataset...")
-    df = loader.get_sample_data(n_samples=5000, random_state=42)
-    
-    # Enhanced data processing - outlier detection
-    print("Detecting outliers...")
-    outlier_info = loader.detect_outliers(df, method='iqr')
-    total_outliers = sum([info['outlier_count'] for info in outlier_info.values()])
-    print(f"✓ Outliers detected: {total_outliers} across {len(outlier_info)} features")
-    
-    # Handle outliers
-    df_clean = loader.handle_outliers(df, outlier_info, treatment='cap')
-    
-    # Normalize features
-    numeric_cols = ['age', 'income', 'credit_score', 'employment_years']
-    df_normalized = loader.normalize_features(df_clean, numeric_cols, method='standard')
-    
-    # Data quality check
-    quality_report = loader.basic_data_quality_check(df_normalized, 'default')
-    print(f"✓ Dataset processed: {quality_report['shape']} (rows × columns)")
+    # Download Lending Club dataset using kagglehub
+    # print("login to kagglehub")
+    # kagglehub.login() # login to kagglehub for downloading the dataset
+    # lc_path = kagglehub.dataset_download("wordsforthewise/lending-club")
+    # print("Path to dataset files:", lc_path)
+    data_path = "C:\\Users\\xzhaox\\Desktop\\OneDrive\\risk_management\\risk-management\\data"
+    # Load Lending Club datasets (accepted/rejected) from path
+    loader = CreditDataLoader(data_path=data_path)
+    datasets = loader.load_lending_club()
+    accepted_df = datasets.get('accepted')
+    # rejected_df = datasets.get('rejected')
+    print("Accepted loans dataset loaded:", accepted_df.shape if accepted_df is not None else "Not found")
+    # print("Rejected loans dataset loaded:", rejected_df.shape if rejected_df is not None else "Not found")
+
+    # Prepare accepted dataset using LC-specific preprocessor
+    lc_prep = LendingClubPreprocessor()
+    df_prepared = lc_prep.prepare_accepted(accepted_df)
+
+    # Quality check after preparation
+    quality_report = loader.basic_data_quality_check(df_prepared, 'default')
+    print(f"✓ Accepted dataset prepared: {quality_report['shape']} (rows × columns)")
     print(f"✓ Default rate: {quality_report['target_rate']:.2%}")
-    print(f"✓ Data normalization completed for {len(numeric_cols)} features")
     
     # Step 2: Advanced Feature Engineering & Data Preparation
     print("\n🔧 Step 2: Feature Engineering & Data Preparation")
@@ -72,21 +75,24 @@ def main():
     
     # Create comprehensive risk features
     print("Creating advanced risk features...")
-    df_features = fe.create_risk_features(df_normalized)
+    # Start from prepared LC dataset
+    df_features = fe.create_risk_features(df_prepared)
     df_features = fe.create_interaction_features(df_features, max_interactions=5)
-    df_features = fe.create_behavioral_patterns(df_features, 'default')
+    df_features = fe.create_behavioral_features(df_features)
     
     # Handle missing values and encode categoricals
-    df_clean = fe.handle_missing_values(df_features, strategy='advanced')
-    df_encoded = fe.encode_categorical_features(df_clean, target_col='default')
+    df_imputed = fe.handle_missing_values(df_features)
+    df_encoded = fe.encode_categorical_features(df_imputed, target_col='default')
     
     # Feature selection
-    selected_features = fe.select_features(df_encoded, 'default', method='mutual_info', k=20)
+    # Build X/y and select features
+    X = df_encoded.drop(columns=['default'])
+    y = df_encoded['default']
+    X_selected_df, selected_features = fe.select_features(X, y, method='mutual_info', k=20)
     
-    summary = fe.get_feature_summary()
-    print(f"✓ Feature engineering complete: {summary['total_features']} features created")
+    summary = fe.get_feature_summary(df_encoded)
+    print(f"✓ Feature engineering complete: {summary['total_features']} features in dataset")
     print(f"✓ Selected top {len(selected_features)} most informative features")
-    print(f"✓ Missing value imputation: {summary['imputation_strategies']}")
     
     # Step 3: Model Development & Scoring Pipeline
     print("\n🤖 Step 3: Model Development & Scoring Pipeline")
@@ -96,7 +102,9 @@ def main():
     
     # Prepare data with proper splits
     print("Preparing training/validation/test datasets...")
-    data_splits = models.prepare_data(df_encoded[selected_features + ['default']], 'default', test_size=0.3)
+    df_for_model = X_selected_df.copy()
+    df_for_model['default'] = y.values
+    data_splits = models.prepare_data(df_for_model, 'default', test_size=0.3)
     
     # Train multiple models
     print("Training ensemble of ML models...")
@@ -415,3 +423,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Error during demonstration: {e}")
         print("Please check that all modules are properly implemented.")
+
+
+# %%

@@ -250,6 +250,36 @@ The toolkit supports multiple popular credit risk datasets:
    df = loader.load_home_credit('data/application_train.csv')
    ```
 
+### Lending Club (accepted/rejected) Data Prep
+
+We provide a Lending Club–specific pipeline that follows an ordered risk data prep:
+
+1) Raw cleaning (duplicates, useless text/URL columns, consistency checks, type conversions, trim garbage rows)
+2) Outlier/missing (winsorize key numeric fields; logical imputations with missing flags)
+3) Feature engineering (fico_avg, credit history length, payment-to-income, grade mapping, logs, target from loan_status)
+4) Encoding/normalization (performed via `FeatureEngineer` after LC-specific prep)
+
+Example:
+```python
+from src.data_loader import CreditDataLoader
+from src.lending_club_preprocessing import LendingClubPreprocessor
+from src.feature_engineering import FeatureEngineer
+
+loader = CreditDataLoader(data_path='data')
+datasets = loader.load_lending_club()  # finds accepted/rejected CSVs recursively
+accepted = datasets['accepted']
+
+lc = LendingClubPreprocessor()
+df_prepared = lc.prepare_accepted(accepted)  # cleaned + engineered + default target
+
+fe = FeatureEngineer()
+df_feat = fe.create_risk_features(df_prepared)
+df_feat = fe.create_interaction_features(df_feat, max_interactions=5)
+df_feat = fe.create_behavioral_features(df_feat)
+df_imputed = fe.handle_missing_values(df_feat)
+df_encoded = fe.encode_categorical_features(df_imputed, target_col='default')
+```
+
 ## 🧪 Testing
 
 Run the comprehensive test suite:

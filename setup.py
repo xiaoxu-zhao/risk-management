@@ -14,7 +14,7 @@ setup(
     name="credit-risk-management",
     version="1.0.0",
     author="xiaoxu(Ivan) zhao",
-    author_email="your.email@example.com",
+    author_email="xiaoxu.zhao@gu.se",
     description="A comprehensive credit risk management toolkit for job-seeking demonstration",
     long_description=long_description,
     long_description_content_type="text/markdown",

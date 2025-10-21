@@ -170,107 +170,33 @@ from src.risk_metrics import RiskMetrics
 # ... code to calculate EL, VaR, and regulatory capital ...
 ```
 
-## 📊 Supported Datasets
+## 📊 Focus Dataset: Lending Club
 
-The toolkit supports multiple popular credit risk datasets:
+The toolkit is currently focused on the **Lending Club** dataset, a popular source for P2P lending historical data. Future development will add support for other standard credit risk datasets.
 
-### Kaggle Datasets
-- **Give Me Some Credit**: Kaggle competition dataset with 10 risk features
-- **Home Credit Default Risk**: Comprehensive dataset with multiple data sources
-- **Lending Club**: P2P lending historical data
-- **German Credit Data**: Classic UCI dataset for binary classification
+### Lending Club Data Preparation Pipeline
 
-### Usage Instructions
-1. Download datasets from Kaggle/UCI repositories
-2. Place in `data/` directory
-3. Use appropriate loader methods:
-   ```python
-   # For Give Me Some Credit
-   df = loader.load_give_me_credit('data/cs-training.csv')
-   
-   # For Home Credit
-   df = loader.load_home_credit('data/application_train.csv')
-   ```
+We provide a Lending Club–specific pipeline that follows an ordered risk data preparation process:
 
-### Lending Club (accepted/rejected) Data Prep
+1.  **Raw Cleaning**: Handles duplicates, removes useless text/URL columns, checks for data consistency, converts data types, and trims invalid rows.
+2.  **Outlier & Missing Value Treatment**: Winsorizes key numeric fields to cap outliers and performs logical imputations for missing data while creating missing-value indicator flags.
+3.  **Feature Engineering**: Creates new features such as average FICO score, credit history length, payment-to-income ratios, and derives the binary `default` target from the `loan_status` column.
+4.  **Encoding & Normalization**: This final step is handled by the `FeatureEngineer` class in the modeling pipeline to prepare data for machine learning algorithms.
 
-We provide a Lending Club–specific pipeline that follows an ordered risk data prep:
-
-1) Raw cleaning (duplicates, useless text/URL columns, consistency checks, type conversions, trim garbage rows)
-2) Outlier/missing (winsorize key numeric fields; logical imputations with missing flags)
-3) Feature engineering (fico_avg, credit history length, payment-to-income, grade mapping, logs, target from loan_status)
-4) Encoding/normalization (performed via `FeatureEngineer` after LC-specific prep)
-
-Example:
-```python
-from src.data_loader import CreditDataLoader
-from src.lending_club_preprocessing import LendingClubPreprocessor
-from src.feature_engineering import FeatureEngineer
-
-loader = CreditDataLoader(data_path='data')
-datasets = loader.load_lending_club()  # finds accepted/rejected CSVs recursively
-accepted = datasets['accepted']
-
-lc = LendingClubPreprocessor()
-df_prepared = lc.prepare_accepted(accepted)  # cleaned + engineered + default target
-
-fe = FeatureEngineer()
-df_feat = fe.create_risk_features(df_prepared)
-df_feat = fe.create_interaction_features(df_feat, max_interactions=5)
-df_feat = fe.create_behavioral_features(df_feat)
-df_imputed = fe.handle_missing_values(df_feat)
-df_encoded = fe.encode_categorical_features(df_imputed, target_col='default')
-```
+The primary workflow for this process is demonstrated in the [Quick Start](#-quick-start) section.
 
 ## 🧪 Testing
+
+> **(Planned)** The test suite is under development.
 
 Run the comprehensive test suite:
 
 ```bash
-# Run all tests
+# (Planned) Run all tests
 pytest tests/ -v
 
-# Run with coverage
+# (Planned) Run with coverage
 pytest tests/ --cov=src --cov-report=html
-
-# Run specific test module
-pytest tests/test_models.py -v
-```
-
-## 📋 Model Performance Benchmarks
-
-Expected performance on standard datasets:
-
-| Model | Dataset | AUC-ROC | Precision | Recall | F1-Score |
-|-------|---------|---------|-----------|---------|----------|
-| Logistic Regression | Give Me Credit | 0.82+ | 0.65+ | 0.45+ | 0.53+ |
-| Random Forest | Give Me Credit | 0.85+ | 0.70+ | 0.50+ | 0.58+ |
-| XGBoost | Give Me Credit | 0.87+ | 0.72+ | 0.55+ | 0.62+ |
-
-## 🔧 Configuration
-
-### Model Hyperparameters
-Key hyperparameters can be configured in the model training methods:
-
-```python
-# XGBoost configuration
-xgb_params = {
-    'n_estimators': 200,
-    'max_depth': 6,
-    'learning_rate': 0.1,
-    'subsample': 0.9,
-    'colsample_bytree': 0.9
-}
-```
-
-### Risk Calculation Settings
-```python
-# VaR configuration
-var_config = {
-    'confidence_level': 0.95,
-    'method': 'historical',  # or 'parametric', 'monte_carlo'
-    'lookback_period': 252
-}
 ```
 
 ## 🤝 Contributing

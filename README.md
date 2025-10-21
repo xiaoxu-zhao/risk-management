@@ -44,29 +44,41 @@ This repository demonstrates core credit risk management capabilities including:
 
 ## 📁 Project Structure
 
+> **Note:** This project is currently under active development. The modules marked as `(In Progress)` or `(Planned)` are placeholders for future implementation.
+
+**Completed & In-Progress Modules:**
+- `data_loader.py`: Complete.
+- `lending_club_preprocessing.py`: Complete.
+- `feature_engineering.py`: Complete.
+- `visualization.py`: Initial implementation complete.
+- `01_data_exploration.ipynb`: Complete.
+
+---
+
 ```
 risk-management/
 ├── src/                          # Core source code
 │   ├── __init__.py              # Package initialization
-│   ├── data_loader.py           # Enhanced data loading and preprocessing
-│   ├── feature_engineering.py   # Advanced feature creation and selection
-│   ├── models.py                # ML model implementations with calibration
-│   ├── risk_metrics.py          # Risk calculations and metrics
-│   ├── visualization.py         # Plotting and dashboard tools
-│   ├── moc.py                   # Model of Credit (MoC) framework
-│   └── monitoring.py            # Model monitoring and drift detection
+│   ├── data_loader.py           # Data loading and initial quality checks
+│   ├── lending_club_preprocessing.py # Specific cleaning for Lending Club data
+│   ├── feature_engineering.py   # Feature creation and transformation
+│   ├── visualization.py         # Plotting utilities (In Progress)
+│   ├── models.py                # (Planned) ML model implementations
+│   ├── risk_metrics.py          # (Planned) Risk calculations (VaR, EL, etc.)
+│   ├── moc.py                   # (Planned) Model of Credit (MoC) framework
+│   └── monitoring.py            # (Planned) Model monitoring (PSI, KS)
 ├── notebooks/                    # Jupyter analysis notebooks
-│   ├── 01_data_exploration.ipynb
-│   ├── 02_feature_engineering.ipynb
-│   ├── 03_model_development.ipynb
-│   ├── 04_risk_analysis.ipynb
-│   ├── 05_moc_implementation.ipynb
-│   └── 06_model_monitoring.ipynb
-├── tests/                        # Comprehensive test suite
+│   ├── 01_data_exploration.ipynb  # Complete
+│   ├── 02_feature_engineering.ipynb # (Planned)
+│   ├── 03_model_development.ipynb   # (Planned)
+│   ├── 04_risk_analysis.ipynb       # (Planned)
+│   ├── 05_moc_implementation.ipynb  # (Planned)
+│   └── 06_model_monitoring.ipynb    # (Planned)
+├── tests/                        # (Planned) Comprehensive test suite
 │   ├── test_data_loader.py
+│   ├── test_feature_engineering.py
 │   ├── test_models.py
 │   ├── test_risk_metrics.py
-│   ├── test_moc.py
 │   └── test_monitoring.py
 ├── data/                         # Dataset storage (gitignored)
 ├── docs/                         # Additional documentation
@@ -106,126 +118,56 @@ risk-management/
 
 ## 📝 Quick Start
 
-### 1. Generate Sample Data
+This guide demonstrates how to use the currently completed modules for data loading, preprocessing, and initial visualization. As more modules are developed, this section will be updated.
+
+### 1. Data Loading and Preprocessing
+This example shows the primary workflow for loading the Lending Club dataset and applying the specific cleaning and feature engineering logic.
+
 ```python
 from src.data_loader import CreditDataLoader
-
-# Create data loader
-loader = CreditDataLoader()
-
-# Generate sample credit dataset
-df = loader.get_sample_data(n_samples=10000, random_state=42)
-
-# Perform data quality check
-quality_report = loader.basic_data_quality_check(df, 'default')
-print(f"Dataset shape: {quality_report['shape']}")
-print(f"Default rate: {quality_report['target_rate']:.2%}")
-```
-
-### 2. Feature Engineering
-```python
-from src.feature_engineering import FeatureEngineer
-
-# Initialize feature engineer
-fe = FeatureEngineer()
-
-# Create risk-specific features
-df_features = fe.create_risk_features(df)
-df_features = fe.create_interaction_features(df_features)
-
-# Handle missing values and encode categorical variables
-df_clean = fe.handle_missing_values(df_features)
-df_encoded = fe.encode_categorical_features(df_clean, target_col='default')
-```
-
-### 3. Model Training and Evaluation
-```python
-from src.models import CreditRiskModels
-
-# Initialize model trainer
-models = CreditRiskModels(random_state=42)
-
-# Prepare data splits
-data_splits = models.prepare_data(df_encoded, 'default', test_size=0.3)
-
-# Train multiple models
-lr_model = models.train_logistic_regression(
-    data_splits['X_train'], data_splits['y_train']
-)
-
-xgb_model = models.train_xgboost(
-    data_splits['X_train'], data_splits['y_train'],
-    data_splits['X_val'], data_splits['y_val']
-)
-
-# Evaluate models
-lr_results = models.evaluate_model(
-    lr_model, data_splits['X_test'], data_splits['y_test'], 'logistic_regression'
-)
-
-xgb_results = models.evaluate_model(
-    xgb_model, data_splits['X_test'], data_splits['y_test'], 'xgboost'
-)
-
-# Compare performance
-comparison = models.compare_models()
-print(comparison)
-```
-
-### 4. Risk Analytics
-```python
-from src.risk_metrics import RiskMetrics
-
-# Initialize risk calculator
-risk_calc = RiskMetrics()
-
-# Generate portfolio data
-exposures = np.random.lognormal(12, 1, 1000)
-pds = models.predict_default_probability('xgboost', data_splits['X_test'])
-lgds = np.random.beta(2, 3, len(pds))
-
-# Calculate Expected Loss
-el_metrics = risk_calc.calculate_expected_loss(exposures, pds, lgds)
-print(f"Portfolio Expected Loss: ${el_metrics['total_el']:,.2f}")
-
-# Calculate regulatory capital
-capital_metrics = risk_calc.calculate_regulatory_capital(exposures, pds, lgds)
-print(f"Total Capital Requirement: ${capital_metrics['total_capital_needed']:,.2f}")
-
-# Perform stress testing
-stress_scenarios = {
-    'mild_recession': {'pd_multiplier': 2.0},
-    'severe_recession': {'pd_multiplier': 4.0}
-}
-stress_results = risk_calc.stress_test_portfolio(pds, stress_scenarios)
-```
-
-### 5. Visualization and Reporting
-```python
+from src.lending_club_preprocessing import LendingClubPreprocessor
 from src.visualization import RiskVisualizer
+import matplotlib.pyplot as plt
 
-# Initialize visualizer
-viz = RiskVisualizer()
+# Define the path to your data directory
+DATA_DIR = 'data/'
 
-# Plot model performance comparison
-model_results = {
-    'logistic_regression': lr_results,
-    'xgboost': xgb_results
-}
+# Step 1: Load the raw data
+print("Loading data...")
+loader = CreditDataLoader(data_path=DATA_DIR)
+datasets = loader.load_lending_club(accepted_only=True)
+accepted_df = datasets['accepted']
+print(f"Raw data loaded with shape: {accepted_df.shape}")
 
-# ROC curves
-roc_fig = viz.plot_roc_curves(model_results)
+# Step 2: Apply Lending Club-specific preprocessing
+print("Preprocessing data...")
+preprocessor = LendingClubPreprocessor(include_pricing_features=False)
+df_prepared = preprocessor.prepare_accepted(accepted_df)
+print(f"Data prepared. New shape: {df_prepared.shape}")
+print(f"Default rate in prepared data: {df_prepared['default'].mean():.2%}")
+
+# Step 3: Visualize feature correlations
+print("Generating correlation heatmap...")
+visualizer = RiskVisualizer()
+fig = visualizer.plot_correlation_heatmap(df_prepared, figsize=(12, 10))
 plt.show()
+```
 
-# Feature importance
-top_features = models.get_feature_importance_ranking('xgboost', top_k=15)
-importance_dict = dict(top_features)
-importance_fig = viz.plot_feature_importance(importance_dict)
-plt.show()
+### 2. Future Usage (Planned)
+The following examples illustrate the intended functionality of modules that are currently planned for development.
 
-# Interactive dashboard
-dashboard = viz.create_interactive_risk_dashboard(model_results)
-dashboard.show()
+#### Model Training and Evaluation
+```python
+# (Planned)
+from src.models import CreditRiskModels
+# ... code to train and evaluate models ...
+```
+
+#### Risk Analytics
+```python
+# (Planned)
+from src.risk_metrics import RiskMetrics
+# ... code to calculate EL, VaR, and regulatory capital ...
 ```
 
 ## 📊 Supported Datasets

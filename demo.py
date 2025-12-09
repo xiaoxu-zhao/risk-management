@@ -17,8 +17,8 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import kagglehub
-from kagglehub import KaggleDatasetAdapter
+# import kagglehub
+# from kagglehub import KaggleDatasetAdapter
 
 # Add src to path
 sys.path.append('src')
@@ -27,7 +27,7 @@ from data_loader import CreditDataLoader
 from lending_club_preprocessing import LendingClubPreprocessor
 from feature_engineering import FeatureEngineer  
 from models import CreditRiskModels
-from risk_metrics import RiskMetrics
+from risk_metrics import RiskMetrics, IFRS9Calculator
 from visualization import RiskVisualizer
 from moc import ModelOfCredit
 from monitoring import ModelMonitor
@@ -50,6 +50,11 @@ def main():
     # lc_path = kagglehub.dataset_download("wordsforthewise/lending-club")
     # print("Path to dataset files:", lc_path)
     data_path = "C:\\Users\\xzhaox\\Desktop\\OneDrive\\risk_management\\risk-management\\data"
+    
+    if not os.path.exists(data_path):
+        print(f"Warning: Data path {data_path} does not exist. Trying default 'data/'")
+        data_path = os.path.join(os.getcwd(), 'data')
+        
     # Load Lending Club datasets (accepted/rejected) from path
     loader = CreditDataLoader(data_path=data_path)
     datasets = loader.load_lending_club()
@@ -259,13 +264,45 @@ def main():
     print("-" * 50)
     
     risk_calc = RiskMetrics()
+    ifrs9_calc = IFRS9Calculator()
     
     # Portfolio risk metrics using MoC outputs
     exposures = ead_results['ead_amounts']
     pds = pd_results['pd_estimates']
     lgds = np.full(len(pds), lgd_results['mean_lgd'])
     
-    # Enhanced expected loss calculation
+    # --- IFRS 9 Compliance Section ---
+    print("Performing IFRS 9 Regulatory Calculations...")
+    
+    # Simulate historical data for staging (Original PD at origination)
+    # Assume some loans have deteriorated (Original PD < Current PD)
+    original_pds = pds * np.random.uniform(0.5, 1.2, size=len(pds))
+    remaining_terms = np.random.choice([1, 2, 3, 5], size=len(pds)) # Years
+    
+    # Define Macroeconomic Scenarios (Forward-Looking Information)
+    macro_scenarios = {'base': 1.0, 'optimistic': 0.8, 'downturn': 1.5}
+    scenario_weights = {'base': 0.6, 'optimistic': 0.2, 'downturn': 0.2}
+    
+    # Adjust PDs for FLI
+    fli_pds = ifrs9_calc.apply_macro_scenarios(pds, macro_scenarios, scenario_weights)
+    
+    # Calculate IFRS 9 ECL
+    ifrs9_results = ifrs9_calc.calculate_ecl(
+        exposures=exposures,
+        pd_12m=fli_pds,
+        original_pd=original_pds,
+        lgd=lgds,
+        remaining_term_years=remaining_terms
+    )
+    
+    print(f"✓ IFRS 9 Total ECL: ${ifrs9_results['total_ecl']:,.2f}")
+    print("✓ IFRS 9 Staging Breakdown:")
+    for stage in ['Stage 1', 'Stage 2', 'Stage 3']:
+        count = ifrs9_results['count_by_stage'][stage]
+        ecl = ifrs9_results['ecl_by_stage'][stage]
+        print(f"   • {stage}: {count} loans | ECL: ${ecl:,.0f}")
+
+    # Enhanced expected loss calculation (Basel/Economic View)
     el_metrics = risk_calc.calculate_expected_loss(exposures, pds, lgds)
     print(f"✓ Portfolio Expected Loss: ${el_metrics['total_el']:,.2f}")
     
@@ -322,8 +359,9 @@ def main():
     
     # Calibration plot
     plt.subplot(2, 4, 3)
-    calibration_fig = viz.plot_calibration_curve(
-        data_splits['y_test'], current_scores, figsize=(5, 5)
+    # Use plot_calibration_curves (plural) as defined in visualization.py
+    calibration_fig = viz.plot_calibration_curves(
+        {'xgboost': xgb_results}, figsize=(5, 5)
     )
     plt.title('Model Calibration')
     
@@ -387,6 +425,7 @@ def main():
     print(f"  ✅ Model of Credit: Complete PD/LGD/EAD framework with RAROC")
     print(f"  ✅ Model Monitoring: PSI, KS testing, drift detection, automated alerts")
     print(f"  ✅ Risk Analytics: Credit VaR, stress testing, regulatory capital")
+    print(f"  ✅ IFRS 9 Compliance: Staging (1/2/3), Lifetime ECL, Macro-economic FLI")
     print(f"  ✅ Production Pipeline: Scoring pipeline with monitoring integration")
     
     print("\nKEY PERFORMANCE METRICS:")

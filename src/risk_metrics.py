@@ -2,443 +2,242 @@
 Risk Metrics Module
 ==================
 
-Implementation of key risk metrics used in credit risk management:
-- Value at Risk (VaR)
-- Expected Shortfall (Conditional VaR)
-- Probability of Default (PD)
-- Loss Given Default (LGD)
-- Expected Loss (EL)
-- Risk-Adjusted Return on Capital (RAROC)
+Financial risk calculations based on PD, LGD, and EAD.
+Implements standard Basel II/III formulas for regulatory capital and risk assessment.
 """
+from __future__ import annotations
 
-import pandas as pd
 import numpy as np
-from typing import Dict, List, Tuple, Optional
-from scipy import stats
-import logging
-
-logger = logging.getLogger(__name__)
-
+import pandas as pd
+from typing import Dict, Optional, Any
 
 class RiskMetrics:
+    def __init__(self):
+        pass
+
+    def calculate_expected_loss(self, 
+                              pd_array: np.ndarray, 
+                              ead_array: np.ndarray, 
+                              lgd: float = 0.45) -> Dict[str, float]:
+        """
+        Calculates Expected Loss (EL) = PD * LGD * EAD.
+        """
+        # Ensure inputs are numpy arrays
+        pd_array = np.asarray(pd_array)
+        ead_array = np.asarray(ead_array)
+        lgd_array = np.asarray(lgd)
+        
+        el_per_loan = pd_array * lgd_array * ead_array
+        total_el = np.sum(el_per_loan)
+        
+        return {
+            'total_el': total_el,
+            'el_rate': total_el / np.sum(ead_array) if np.sum(ead_array) > 0 else 0.0
+        }
+
+    def calculate_regulatory_capital(self, 
+                                   exposures: np.ndarray, 
+                                   pds: np.ndarray, 
+                                   lgds: np.ndarray) -> Dict[str, float]:
+        """
+        Calculates Regulatory Capital using Basel IRB formula.
+        """
+        # Call portfolio var to get capital requirement
+        capital = self.calculate_portfolio_var(pds, exposures, lgds)
+        return {'total_capital_needed': capital}
+
+    def calculate_portfolio_var(self, 
+                              pd_array: np.ndarray, 
+                              ead_array: np.ndarray, 
+                              lgd: float = 0.45, 
+                              confidence_level: float = 0.999) -> float:
+        """
+        Calculates Credit Value at Risk (VaR) using the Vasicek Single Factor Model.
+        """
+        pd_array = np.asarray(pd_array)
+        ead_array = np.asarray(ead_array)
+        lgd_array = np.asarray(lgd)
+        
+        # Avoid log(0) or division by zero errors
+        pd_array = np.clip(pd_array, 1e-6, 1 - 1e-6)
+        
+        # Asset correlation (R) - simplified Basel formula for retail exposures
+        R = 0.03 + 0.13 * np.exp(-35 * pd_array)
+        
+        # Inverse normal of confidence level
+        from scipy.stats import norm
+        q = norm.ppf(confidence_level)
+        
+        # Conditional PD (Worst-case PD at confidence level)
+        term1 = norm.ppf(pd_array)
+        term2 = np.sqrt(R) * q
+        term3 = np.sqrt(1 - R)
+        conditional_pd = norm.cdf((term1 + term2) / term3)
+        
+        # Capital Requirement (K) per loan
+        capital_per_loan = ead_array * lgd_array * (conditional_pd - pd_array)
+        
+        # VaR is the sum of capital requirements
+        var = np.sum(capital_per_loan)
+        return var
+
+    def stress_test_portfolio(self, pds: np.ndarray, scenarios: Dict[str, Dict]) -> Dict[str, Any]:
+        """
+        Performs stress testing by adjusting PDs based on scenarios.
+        """
+        results = {}
+        for name, params in scenarios.items():
+            multiplier = params.get('pd_multiplier', 1.0)
+            stressed_pds = np.clip(pds * multiplier, 0, 1)
+            results[name] = {
+                'pd_increase': np.mean(stressed_pds) - np.mean(pds),
+                'mean_pd': np.mean(stressed_pds)
+            }
+        return results
+
+    def calculate_credit_var_monte_carlo(self, 
+                                       exposures: np.ndarray, 
+                                       pds: np.ndarray, 
+                                       lgds: np.ndarray, 
+                                       n_simulations: int = 1000) -> Dict[str, Any]:
+        """
+        Calculates Credit VaR using Monte Carlo simulation.
+        """
+        n_loans = len(exposures)
+        # Simple correlation model (single factor)
+        rho = 0.1 # Asset correlation
+        
+        # Systemic factor Z
+        Z = np.random.normal(0, 1, n_simulations)
+        
+        # Idiosyncratic factors
+        losses = np.zeros(n_simulations)
+        
+        # Vectorized simulation
+        # Threshold for default: N^-1(PD)
+        from scipy.stats import norm
+        default_thresholds = norm.ppf(pds)
+        
+        for i in range(n_simulations):
+            # Asset value A = sqrt(rho)*Z + sqrt(1-rho)*epsilon
+            epsilon = np.random.normal(0, 1, n_loans)
+            asset_values = np.sqrt(rho) * Z[i] + np.sqrt(1 - rho) * epsilon
+            
+            defaults = asset_values < default_thresholds
+            loss = np.sum(exposures * lgds * defaults)
+            losses[i] = loss
+            
+        var_999 = np.percentile(losses, 99.9)
+        expected_shortfall = np.mean(losses[losses >= var_999])
+        
+        return {
+            'credit_var': var_999,
+            'expected_shortfall': expected_shortfall,
+            'loss_distribution': losses
+        }
+
+class IFRS9Calculator:
     """
-    Comprehensive risk metrics calculator for credit portfolios.
+    Implements IFRS 9 Impairment logic:
+    - Staging (Stage 1, 2, 3) based on SICR (Significant Increase in Credit Risk)
+    - 12-month vs Lifetime ECL
+    - Forward-Looking Information (Macroeconomic scenarios)
     """
     
     def __init__(self):
-        self.portfolio_metrics = {}
+        pass
         
-    def calculate_var(self, returns: np.ndarray, 
-                     confidence_level: float = 0.95,
-                     method: str = 'historical') -> float:
+    def determine_stage(self, 
+                       current_pd: np.ndarray, 
+                       original_pd: np.ndarray, 
+                       days_past_due: Optional[np.ndarray] = None,
+                       sicr_threshold: float = 2.0) -> np.ndarray:
         """
-        Calculate Value at Risk (VaR) using different methodologies.
-        
-        Args:
-            returns: Array of portfolio returns or losses
-            confidence_level: Confidence level (e.g., 0.95 for 95% VaR)
-            method: Method to use ('historical', 'parametric', 'monte_carlo')
-            
-        Returns:
-            VaR value (positive number representing potential loss)
+        Assigns IFRS 9 Stages (1, 2, 3).
         """
-        if method == 'historical':
-            # Historical simulation method
-            var = np.percentile(returns, (1 - confidence_level) * 100)
-            
-        elif method == 'parametric':
-            # Parametric method assuming normal distribution
-            mean_return = np.mean(returns)
-            std_return = np.std(returns)
-            z_score = stats.norm.ppf(1 - confidence_level)
-            var = mean_return + z_score * std_return
-            
-        elif method == 'monte_carlo':
-            # Monte Carlo simulation
-            n_simulations = 10000
-            mean_return = np.mean(returns)
-            std_return = np.std(returns)
-            
-            # Generate random returns
-            simulated_returns = np.random.normal(mean_return, std_return, n_simulations)
-            var = np.percentile(simulated_returns, (1 - confidence_level) * 100)
-            
-        else:
-            raise ValueError(f"Unknown VaR method: {method}")
-            
-        # Return as positive value (loss amount)
-        return -var if var < 0 else var
+        n_samples = len(current_pd)
+        stages = np.ones(n_samples, dtype=int) # Default to Stage 1
         
-    def calculate_expected_shortfall(self, returns: np.ndarray, 
-                                   confidence_level: float = 0.95) -> float:
+        # Check for SICR (Significant Increase in Credit Risk)
+        # Rule 1: Relative threshold (e.g., PD doubled)
+        sicr_mask = (current_pd / (original_pd + 1e-6)) > sicr_threshold
+        stages[sicr_mask] = 2
+        
+        # Rule 2: Absolute threshold (e.g., PD > 20%)
+        stages[current_pd > 0.20] = 2
+        
+        # Rule 3: Days Past Due (Backstop)
+        if days_past_due is not None:
+            stages[days_past_due > 30] = 2
+            stages[days_past_due > 90] = 3
+            
+        # Defaulted loans are Stage 3
+        stages[current_pd >= 0.99] = 3
+        
+        return stages
+
+    def calculate_lifetime_pd(self, pd_12m: np.ndarray, remaining_term_years: np.ndarray) -> np.ndarray:
         """
-        Calculate Expected Shortfall (Conditional VaR).
-        
-        Args:
-            returns: Array of portfolio returns or losses
-            confidence_level: Confidence level
-            
-        Returns:
-            Expected Shortfall value
+        Approximates Lifetime PD from 12-month PD using survival probability.
         """
-        var_threshold = np.percentile(returns, (1 - confidence_level) * 100)
-        
-        # Expected value of returns below VaR threshold
-        tail_returns = returns[returns <= var_threshold]
-        
-        if len(tail_returns) == 0:
-            return 0.0
-            
-        expected_shortfall = np.mean(tail_returns)
-        
-        # Return as positive value (expected loss amount)
-        return -expected_shortfall if expected_shortfall < 0 else expected_shortfall
-        
-    def calculate_portfolio_pd(self, default_probabilities: np.ndarray, 
-                              correlation_matrix: np.ndarray = None,
-                              method: str = 'average') -> float:
+        survival_prob_1y = 1.0 - pd_12m
+        survival_prob_lifetime = np.power(survival_prob_1y, remaining_term_years)
+        return 1.0 - survival_prob_lifetime
+
+    def apply_macro_scenarios(self, 
+                            pd_12m: np.ndarray, 
+                            scenarios: Dict[str, float], 
+                            weights: Dict[str, float]) -> np.ndarray:
         """
-        Calculate portfolio-level Probability of Default.
-        
-        Args:
-            default_probabilities: Array of individual PDs
-            correlation_matrix: Asset correlation matrix (optional)
-            method: Calculation method ('average', 'weighted', 'vasicek')
-            
-        Returns:
-            Portfolio PD
+        Adjusts PDs based on weighted macroeconomic scenarios.
         """
-        if method == 'average':
-            # Simple average of individual PDs
-            portfolio_pd = np.mean(default_probabilities)
-            
-        elif method == 'weighted':
-            # Weighted average (assuming equal weights for simplicity)
-            weights = np.ones(len(default_probabilities)) / len(default_probabilities)
-            portfolio_pd = np.sum(weights * default_probabilities)
-            
-        elif method == 'vasicek':
-            # Vasicek single-factor model
-            if correlation_matrix is not None:
-                # Simplified correlation-adjusted calculation
-                avg_correlation = np.mean(correlation_matrix[correlation_matrix != 1])
-            else:
-                avg_correlation = 0.2  # Default asset correlation
-                
-            # Asset value model
-            z_scores = stats.norm.ppf(default_probabilities)
-            portfolio_z = np.mean(z_scores)
-            
-            # Adjust for correlation
-            adjusted_std = np.sqrt(1 - avg_correlation)
-            portfolio_pd = stats.norm.cdf(portfolio_z / adjusted_std)
-            
-        else:
-            raise ValueError(f"Unknown PD calculation method: {method}")
-            
-        return portfolio_pd
+        weighted_pd = np.zeros_like(pd_12m)
         
-    def calculate_lgd_distribution(self, recovery_rates: np.ndarray) -> Dict:
+        for name, multiplier in scenarios.items():
+            weight = weights.get(name, 0.0)
+            scenario_pd = np.clip(pd_12m * multiplier, 0, 1)
+            weighted_pd += scenario_pd * weight
+            
+        return weighted_pd
+
+    def calculate_ecl(self,
+                     exposures: np.ndarray,
+                     pd_12m: np.ndarray,
+                     original_pd: np.ndarray,
+                     lgd: np.ndarray,
+                     remaining_term_years: np.ndarray,
+                     days_past_due: Optional[np.ndarray] = None) -> Dict[str, Any]:
         """
-        Calculate Loss Given Default statistics from recovery rate data.
-        
-        Args:
-            recovery_rates: Array of recovery rates (0-1)
-            
-        Returns:
-            Dictionary with LGD statistics
+        Calculates IFRS 9 Expected Credit Loss (ECL).
         """
-        lgd_values = 1 - recovery_rates
+        # 1. Determine Stage
+        stages = self.determine_stage(pd_12m, original_pd, days_past_due)
         
-        lgd_stats = {
-            'mean_lgd': np.mean(lgd_values),
-            'median_lgd': np.median(lgd_values),
-            'std_lgd': np.std(lgd_values),
-            'min_lgd': np.min(lgd_values),
-            'max_lgd': np.max(lgd_values),
-            'percentile_25': np.percentile(lgd_values, 25),
-            'percentile_75': np.percentile(lgd_values, 75),
-            'percentile_95': np.percentile(lgd_values, 95)
-        }
+        # 2. Calculate Lifetime PD
+        pd_lifetime = self.calculate_lifetime_pd(pd_12m, remaining_term_years)
         
-        return lgd_stats
+        # 3. Calculate ECL per loan
+        ecl = np.zeros_like(exposures)
         
-    def calculate_expected_loss(self, exposures: np.ndarray,
-                              pds: np.ndarray,
-                              lgds: np.ndarray) -> Dict:
-        """
-        Calculate Expected Loss for credit portfolio.
+        # Stage 1: 12-month ECL
+        mask_s1 = (stages == 1)
+        ecl[mask_s1] = exposures[mask_s1] * pd_12m[mask_s1] * lgd[mask_s1]
         
-        Args:
-            exposures: Exposure at Default (EAD) values
-            pds: Probability of Default values
-            lgds: Loss Given Default values
-            
-        Returns:
-            Dictionary with Expected Loss metrics
-        """
-        # Individual expected losses
-        individual_els = exposures * pds * lgds
+        # Stage 2 & 3: Lifetime ECL
+        mask_s23 = (stages >= 2)
+        ecl[mask_s23] = exposures[mask_s23] * pd_lifetime[mask_s23] * lgd[mask_s23]
         
-        # Portfolio metrics
-        el_metrics = {
-            'total_exposure': np.sum(exposures),
-            'individual_els': individual_els,
-            'total_el': np.sum(individual_els),
-            'average_el': np.mean(individual_els),
-            'el_rate': np.sum(individual_els) / np.sum(exposures),
-            'el_concentration': {
-                'top_10_pct': np.sum(np.sort(individual_els)[-int(0.1*len(individual_els)):]) / np.sum(individual_els),
-                'top_5_pct': np.sum(np.sort(individual_els)[-int(0.05*len(individual_els)):]) / np.sum(individual_els),
-                'top_1_pct': np.sum(np.sort(individual_els)[-int(0.01*len(individual_els)):]) / np.sum(individual_els)
+        return {
+            'total_ecl': np.sum(ecl),
+            'stages': stages,
+            'ecl_by_stage': {
+                'Stage 1': np.sum(ecl[stages == 1]),
+                'Stage 2': np.sum(ecl[stages == 2]),
+                'Stage 3': np.sum(ecl[stages == 3])
+            },
+            'count_by_stage': {
+                'Stage 1': np.sum(stages == 1),
+                'Stage 2': np.sum(stages == 2),
+                'Stage 3': np.sum(stages == 3)
             }
         }
-        
-        return el_metrics
-        
-    def calculate_regulatory_capital(self, exposures: np.ndarray,
-                                   pds: np.ndarray,
-                                   lgds: np.ndarray,
-                                   asset_correlations: np.ndarray = None,
-                                   confidence_level: float = 0.999) -> Dict:
-        """
-        Calculate regulatory capital using Basel III IRB approach.
-        
-        Args:
-            exposures: Exposure at Default values
-            pds: Probability of Default values  
-            lgds: Loss Given Default values
-            asset_correlations: Asset correlation values (optional)
-            confidence_level: Regulatory confidence level (99.9% for Basel III)
-            
-        Returns:
-            Dictionary with regulatory capital metrics
-        """
-        # Default correlations if not provided (Basel III corporate formula)
-        if asset_correlations is None:
-            asset_correlations = 0.12 * (1 - np.exp(-50 * pds)) / (1 - np.exp(-50))
-            asset_correlations += 0.24 * (1 - (1 - np.exp(-50 * pds)) / (1 - np.exp(-50)))
-            
-        # Calculate correlation-adjusted PDs
-        z_pd = stats.norm.ppf(pds)
-        z_confidence = stats.norm.ppf(confidence_level)
-        
-        # Vasicek formula for conditional PD
-        sqrt_corr = np.sqrt(asset_correlations)
-        sqrt_one_minus_corr = np.sqrt(1 - asset_correlations)
-        
-        conditional_pd = stats.norm.cdf(
-            (sqrt_corr * z_confidence + sqrt_one_minus_corr * z_pd) / sqrt_one_minus_corr
-        )
-        
-        # Risk-weighted assets calculation
-        unexpected_loss_rate = conditional_pd * lgds - pds * lgds
-        risk_weighted_assets = exposures * unexpected_loss_rate * 12.5  # 8% capital ratio
-        
-        # Capital requirements
-        capital_metrics = {
-            'individual_rwa': risk_weighted_assets,
-            'total_rwa': np.sum(risk_weighted_assets),
-            'capital_requirement': np.sum(risk_weighted_assets) * 0.08,  # 8% minimum
-            'capital_buffer': np.sum(risk_weighted_assets) * 0.025,  # 2.5% conservation buffer
-            'total_capital_needed': np.sum(risk_weighted_assets) * 0.105,  # 10.5% total
-            'unexpected_loss': np.sum(exposures * unexpected_loss_rate),
-            'capital_adequacy_ratio': lambda capital_held: capital_held / np.sum(risk_weighted_assets)
-        }
-        
-        return capital_metrics
-        
-    def calculate_raroc(self, net_income: float,
-                       economic_capital: float,
-                       expected_loss: float = None) -> float:
-        """
-        Calculate Risk-Adjusted Return on Capital (RAROC).
-        
-        Args:
-            net_income: Net income from the portfolio/loan
-            economic_capital: Economic capital allocated
-            expected_loss: Expected loss (optional, subtracted from income)
-            
-        Returns:
-            RAROC percentage
-        """
-        adjusted_income = net_income
-        if expected_loss is not None:
-            adjusted_income -= expected_loss
-            
-        if economic_capital == 0:
-            return 0.0
-            
-        raroc = (adjusted_income / economic_capital) * 100
-        
-        return raroc
-        
-    def stress_test_portfolio(self, base_pds: np.ndarray,
-                            stress_scenarios: Dict[str, Dict]) -> Dict:
-        """
-        Perform stress testing on credit portfolio.
-        
-        Args:
-            base_pds: Baseline probability of default values
-            stress_scenarios: Dictionary of stress scenarios with PD multipliers
-            
-        Returns:
-            Dictionary with stress test results
-        """
-        stress_results = {}
-        
-        for scenario_name, scenario_params in stress_scenarios.items():
-            # Apply stress multipliers
-            stressed_pds = base_pds * scenario_params.get('pd_multiplier', 1.0)
-            stressed_pds = np.clip(stressed_pds, 0, 1)  # Keep PDs between 0 and 1
-            
-            # Calculate stressed portfolio PD
-            stressed_portfolio_pd = self.calculate_portfolio_pd(stressed_pds)
-            
-            stress_results[scenario_name] = {
-                'stressed_pds': stressed_pds,
-                'portfolio_pd': stressed_portfolio_pd,
-                'pd_increase': stressed_portfolio_pd - self.calculate_portfolio_pd(base_pds),
-                'max_individual_pd': np.max(stressed_pds),
-                'avg_individual_pd': np.mean(stressed_pds)
-            }
-            
-        return stress_results
-        
-    def calculate_portfolio_concentration(self, exposures: np.ndarray,
-                                        sectors: np.ndarray = None) -> Dict:
-        """
-        Calculate portfolio concentration metrics.
-        
-        Args:
-            exposures: Exposure amounts
-            sectors: Sector labels (optional)
-            
-        Returns:
-            Dictionary with concentration metrics
-        """
-        total_exposure = np.sum(exposures)
-        exposure_weights = exposures / total_exposure
-        
-        # Herfindahl-Hirschman Index (HHI)
-        hhi = np.sum(exposure_weights ** 2)
-        
-        # Concentration metrics
-        sorted_exposures = np.sort(exposures)[::-1]
-        concentration_metrics = {
-            'hhi': hhi,
-            'effective_number_of_exposures': 1 / hhi if hhi > 0 else 0,
-            'top_1_concentration': sorted_exposures[0] / total_exposure,
-            'top_5_concentration': np.sum(sorted_exposures[:5]) / total_exposure,
-            'top_10_concentration': np.sum(sorted_exposures[:10]) / total_exposure,
-            'largest_exposure': np.max(exposures),
-            'smallest_exposure': np.min(exposures),
-            'median_exposure': np.median(exposures)
-        }
-        
-        # Sector concentration if sectors provided
-        if sectors is not None:
-            sector_exposures = pd.Series(exposures, index=sectors).groupby(level=0).sum()
-            sector_concentration = sector_exposures / total_exposure
-            
-            concentration_metrics['sector_concentration'] = {
-                'by_sector': sector_concentration.to_dict(),
-                'max_sector_concentration': sector_concentration.max(),
-                'number_of_sectors': len(sector_concentration),
-                'sector_hhi': np.sum((sector_concentration ** 2))
-            }
-            
-        return concentration_metrics
-        
-    def calculate_credit_var_monte_carlo(self, exposures: np.ndarray,
-                                       pds: np.ndarray,
-                                       lgds: np.ndarray,
-                                       correlations: np.ndarray = None,
-                                       n_simulations: int = 10000,
-                                       confidence_level: float = 0.95) -> Dict:
-        """
-        Calculate Credit VaR using Monte Carlo simulation.
-        
-        Args:
-            exposures: Exposure at Default values
-            pds: Probability of Default values
-            lgds: Loss Given Default values
-            correlations: Asset correlation matrix (optional)
-            n_simulations: Number of Monte Carlo simulations
-            confidence_level: Confidence level for VaR
-            
-        Returns:
-            Dictionary with Credit VaR results
-        """
-        n_assets = len(exposures)
-        
-        # Default correlation matrix if not provided
-        if correlations is None:
-            correlations = np.eye(n_assets) * 0.8 + np.ones((n_assets, n_assets)) * 0.2
-            
-        # Cholesky decomposition for correlation
-        chol_matrix = np.linalg.cholesky(correlations)
-        
-        # Monte Carlo simulation
-        portfolio_losses = []
-        
-        for _ in range(n_simulations):
-            # Generate correlated random variables
-            z = np.random.normal(0, 1, n_assets)
-            correlated_z = chol_matrix @ z
-            
-            # Calculate default indicators using asset value model
-            asset_values = correlated_z
-            default_thresholds = stats.norm.ppf(pds)
-            defaults = asset_values < default_thresholds
-            
-            # Calculate portfolio loss
-            losses = defaults * exposures * lgds
-            portfolio_loss = np.sum(losses)
-            portfolio_losses.append(portfolio_loss)
-            
-        portfolio_losses = np.array(portfolio_losses)
-        
-        # Calculate risk metrics
-        expected_loss = np.mean(portfolio_losses)
-        credit_var = np.percentile(portfolio_losses, confidence_level * 100)
-        unexpected_loss = credit_var - expected_loss
-        expected_shortfall = np.mean(portfolio_losses[portfolio_losses >= credit_var])
-        
-        credit_var_results = {
-            'expected_loss': expected_loss,
-            'credit_var': credit_var,
-            'unexpected_loss': unexpected_loss,
-            'expected_shortfall': expected_shortfall,
-            'std_dev_loss': np.std(portfolio_losses),
-            'max_loss': np.max(portfolio_losses),
-            'loss_distribution': portfolio_losses,
-            'simulation_params': {
-                'n_simulations': n_simulations,
-                'confidence_level': confidence_level,
-                'n_assets': n_assets
-            }
-        }
-        
-        return credit_var_results
-        
-    def calculate_portfolio_diversification_ratio(self, individual_vars: np.ndarray,
-                                                portfolio_var: float) -> float:
-        """
-        Calculate portfolio diversification ratio.
-        
-        Args:
-            individual_vars: VaR of individual positions
-            portfolio_var: Portfolio VaR
-            
-        Returns:
-            Diversification ratio
-        """
-        sum_individual_vars = np.sum(individual_vars)
-        
-        if portfolio_var == 0:
-            return 0.0
-            
-        diversification_ratio = 1 - (portfolio_var / sum_individual_vars)
-        
-        return diversification_ratio
